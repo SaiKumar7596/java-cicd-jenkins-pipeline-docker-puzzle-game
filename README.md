@@ -1,6 +1,3 @@
-Nice — I’ll produce the **complete step-by-step lab guide** for your whole CI/CD project, covering everything you did and everything you’ll need to reproduce, troubleshoot, or hand off. I’ll follow your preferred answer format (What it is, Why it matters, key components, use cases, interview-ready concise answer, important points/pitfalls) for each major part, then a long actionable checklist with exact commands, the final corrected files (Jenkinsfile, Dockerfile, corrected `pom.xml` variants), Nexus-delete steps, backup/restore steps, and a troubleshooting appendix with the exact fixes you used.
-
----
 
 # ✅ Lab Guide — Full CI/CD project (Jenkins → SonarQube → Nexus → Docker Hub → Tomcat)
 
