@@ -1,759 +1,791 @@
 
-# ✅ Lab Guide — Full CI/CD project (Jenkins → SonarQube → Nexus → Docker Hub → Tomcat)
+#  Jenkins CI/CD Pipeline Using Docker, SonarQube, Nexus, Maven & Tomcat**
 
-> Assumptions from your environment
->
-> * EC2 public IP: `54.81.139.84` (private `172.31.23.205`)
-> * Jenkins runs in Docker on that EC2 (data persisted to host path `/home/ubuntu/jenkins_home`).
-> * Nexus at `http://54.81.139.84:8081`
-> * SonarQube at `http://54.81.139.84:9000`
-> * Your Docker Hub repo: `saikumar7596/my-repo` (or `saikumar7596/pz-tomcat` as used)
-> * Project repo: `https://github.com/SaiKumar7596/puzzle-game-java`
+A fully automated CI/CD pipeline using **Docker containers**, **Jenkins**, **SonarQube**, **Nexus**, **Maven**, and **Tomcat**, deployed on **Ubuntu EC2**.
 
----
+This pipeline automates:
 
-# SUMMARY (What this doc contains)
-
-1. Architecture & purpose (short)
-2. Pre-work: packages, accounts and public/private keys
-3. Full step-by-step setup (commands) for: host, Jenkins container, Sonar, Nexus, Tomcat image, Docker Hub push, GitHub webhook
-4. How to add tools inside Jenkins (Java/Maven/Docker/Sonar scanner) — exact steps & config values
-5. Jenkinsfile (single corrected file) + Dockerfile + corrected `pom.xml` (release vs snapshot guidance)
-6. How to delete an artifact from Nexus (UI + REST)
-7. Backup & restore Jenkins safely (what you did + recommended script)
-8. Troubleshooting & preserved fixes (JAVA_HOME, docker.sock, Nexus 400, Sonar download issues)
-9. Final checklist (ready-to-run)
-10. Interview-ready concise answers + pitfalls
+1. **Clone source code**
+2. **Run SonarQube Code Quality Analysis**
+3. **Build using Maven**
+4. **Upload WAR artifact to Nexus Repository**
+5. **Build custom Tomcat Docker image**
+6. **Push image to Docker Hub**
+7. **Deploy container to EC2**
 
 ---
 
-# 1 — Architecture (What it is / Why it matters)
+# **📌 1. Project Architecture**
 
-**What it is:** a CI/CD pipeline running on Jenkins (Docker container) which: pulls code from GitHub → runs SonarQube analysis → builds WAR → uploads artifact to Nexus → builds a Docker image that contains Tomcat + your WAR → pushes image to Docker Hub → deploys that image onto the same EC2 (or another target) as a Docker container.
-
-**Why it matters:** Automates build/quality/artifact delivery, produces reproducible images and artefacts, and enables continuous delivery.
-
-**Key components:** GitHub, Jenkins (in Docker), SonarQube (in Docker), Nexus (in Docker), Docker Engine on EC2, Docker Hub, Tomcat (in image).
-
-**Use cases:** automated builds, quality gates, artifact repository for other teams, simple blue/green / rolling deployments on Docker hosts.
-
-**Interview answer (concise):** “I implemented a Jenkins-driven CI pipeline using SonarQube for code quality, Nexus for artifact storage, and Docker to build images. The pipeline builds a WAR, uploads it to Nexus, builds a Tomcat image with the WAR, pushes to Docker Hub, and deploys to an EC2 Docker host — all reproducible and backed by Jenkins job configuration and persistent Jenkins data.”
-
-**Important pitfalls:** Nexus release vs snapshot policy; Docker daemon access from Jenkins container (mounting docker.sock or installing docker inside); secure storage of tokens/ssh keys; JAVA_HOME/tool config mismatch.
-
----
-
-# 2 — Pre-work (accounts, keys, hostname)
-
-1. Ensure EC2 user has `docker` installed on host and listening. You will run `jenkins` container on EC2.
-2. Create or have:
-
-   * GitHub repo → push Jenkinsfile & Dockerfile.
-   * Docker Hub account + repository name.
-   * Nexus admin credentials.
-   * SonarQube admin token (create one when configuring Sonar).
-   * SSH key pair (private key) that Jenkins will use to SSH back to EC2 for deployment. Public key must be added to `~ubuntu/.ssh/authorized_keys` on the deployment target (same EC2 in your case).
-
-     * Example: you have `ci/cd.pem` (key pair name) on your local. Convert to appropriate private key content to store in Jenkins Credentials.
-3. Make sure ports are open in AWS Security Group: 8080/8090 (Jenkins), 8081 (Nexus), 9000 (Sonar), 22 (SSH), 8080 (Tomcat container). You already have these running.
+```
+                   +-------------------+
+                   |     GitHub Repo   |
+                   +---------+---------+
+                             |
+                             v
+                   +-------------------+
+                   |     Jenkins CI    |
+                   | Pipeline (SCM)    |
+                   +---------+---------+
+                             |
+     +----------+------------+--------------+------------------+
+     |          |                           |                  |
+     v          v                           v                  v
++---------+ +--------+           +----------------+     +--------------+
+| SonarQ | | Maven  |           | Nexus Artifact |     | Docker build |
+|  Qube  | | Build  |           | Repository     |     | & Docker Hub |
++---------+ +--------+           +----------------+     +--------------+
+                                                             |
+                                                             v
+                                                     +---------------+
+                                                     |   EC2 Deploy  |
+                                                     +---------------+
+```
 
 ---
 
-# 3 — Host & Container commands (exact, in order)
+# **📌 2. Create EC2 Instance**
 
-> **Host** commands — run on EC2 (`ubuntu@54.81.139.84`)
+### **EC2 Settings**
 
-## 3.1 Install Docker on host (if not installed)
+* OS: **Ubuntu**
+* Instance Type: **t2.large**
+* Key Pair: **Create new key**
+* Network: Allow:
+
+  * **SSH (22)**
+  * **All traffic** (for lab/demo use)
+* Storage: **16GB**
+
+<img width="602" height="273" alt="image" src="https://github.com/user-attachments/assets/4b9f012c-b7fb-4934-8790-02f1c09c2fd5" />
+
+<img width="602" height="277" alt="image" src="https://github.com/user-attachments/assets/172df02b-6209-4c51-b37a-2ff387756b7b" />
+
+<img width="602" height="167" alt="image" src="https://github.com/user-attachments/assets/d732f6ad-7eb4-4ad7-a56a-47ea8e4ad66c" />
+
+<img width="602" height="273" alt="image" src="https://github.com/user-attachments/assets/7a951184-2b7f-4985-94d3-62596f3e92a0" />
+
+<img width="602" height="160" alt="image" src="https://github.com/user-attachments/assets/70dd1e3e-e258-476b-8dbe-6182bfe6f538" />
+
+<img width="602" height="297" alt="image" src="https://github.com/user-attachments/assets/73874680-ce00-45c9-8620-8e6bcff67a13" />
+
+---
+
+# **📌 3. SSH Into the EC2 Server**
 
 ```bash
-# Update
-sudo apt update
-sudo apt install -y docker.io docker-compose
-sudo systemctl enable --now docker
-# Allow ubuntu user to use docker
+ssh -i your-key.pem ubuntu@<EC2_PUBLIC_IP>
+```
+<img width="602" height="204" alt="image" src="https://github.com/user-attachments/assets/c63b7347-512b-466e-9336-8ef2e5c7273a" />
+
+---
+
+# **📌 4. Update Server & Install Dependencies**
+
+```bash
+sudo apt update -y
+sudo apt upgrade -y
+```
+
+Clone your project:
+
+```bash
+git clone https://github.com/SaiKumar7596/puzzle-game-java
+cd puzzle-game-java
+```
+<img width="602" height="86" alt="image" src="https://github.com/user-attachments/assets/256966dd-c202-4e0c-b034-c1226958a4e4" />
+
+---
+
+# **📌 5. Install Docker**
+
+```bash
+sudo apt install docker.io -y
+sudo systemctl enable docker
+sudo systemctl start docker
 sudo usermod -aG docker ubuntu
-# verify
-docker --version
 ```
+<img width="602" height="38" alt="image" src="https://github.com/user-attachments/assets/6a23b390-7d37-47dd-9d21-59a20b8a2af8" />
 
-## 3.2 Pull necessary images
+<img width="602" height="83" alt="image" src="https://github.com/user-attachments/assets/1bbc5349-e4ae-4f08-9701-01ec9707c02c" />
+
+---
+
+# **📌 6. Deploy SonarQube**
+
+### **Pull SonarQube Image**
 
 ```bash
-docker pull jenkins/jenkins:lts
-docker pull sonarqube:latest
-docker pull sonatype/nexus3:latest
-docker pull tomcat:10.1.10-jdk17
+docker pull sonarqube
 ```
+<img width="602" height="175" alt="image" src="https://github.com/user-attachments/assets/27c17e01-b36e-4a05-abde-0a430a8d58ca" />
 
-## 3.3 Run SonarQube, Nexus, and your initial tomcat if desired
-
-(You already have started them — example commands)
+### **Run SonarQube Container**
 
 ```bash
-# Sonar
-docker run -d --name sonar-testing -p 9000:9000 sonarqube:latest
+docker run -d --name sonarqube -p 9000:9000 sonarqube
+```
+<img width="602" height="81" alt="image" src="https://github.com/user-attachments/assets/2a3584a8-b012-44ef-aa84-95aabb7e6aab" />
 
-# Nexus
-docker run -d --name nexus -p 8081:8081 sonatype/nexus3:latest
+### **Access SonarQube**
 
-# Your pz-tomcat (example)
+```
+http://<EC2_PUBLIC_IP>:9000
+```
+
+<img width="602" height="295" alt="image" src="https://github.com/user-attachments/assets/fcab32e4-9fb6-4563-85a7-b66582dd17a2" />
+
+Default login:
+
+* **username:** admin
+* **password:** admin
+
+Change password and create a **Sonar Token** for Jenkins.
+
+<img width="602" height="254" alt="image" src="https://github.com/user-attachments/assets/0080573a-e34c-4329-b26b-e60fb997756c" />
+
+---
+
+# **📌 7. Install Java & Maven on EC2**
+
+```bash
+sudo apt install openjdk-17-jdk -y
+sudo apt install maven -y
+```
+
+Verify:
+
+```bash
+java -version
+mvn -version
+```
+
+<img width="602" height="43" alt="image" src="https://github.com/user-attachments/assets/032d4f2a-3285-41eb-a1af-73b216639667" />
+
+<img width="602" height="62" alt="image" src="https://github.com/user-attachments/assets/9a16ef1b-dff7-40b4-a5d1-26543767f209" />
+
+---
+
+# **📌 8. Run SonarQube Scan**
+
+```bash
+mvn clean install sonar:sonar \
+ -Dsonar.host.url=http://54.81.139.84:9000 \
+ -Dsonar.login=squ_eb6c08ff6f7d390720b6b9dcf906d3d7eedac1b0
+```
+<img width="602" height="101" alt="image" src="https://github.com/user-attachments/assets/675bf0c7-7584-4be6-977d-4dbf61e49160" />
+
+<img width="602" height="70" alt="image" src="https://github.com/user-attachments/assets/0897524d-1a17-4fca-9dd8-1bc108159710" />
+
+
+<img width="602" height="286" alt="image" src="https://github.com/user-attachments/assets/9bb8da20-cdc9-4bfc-8635-6d1c93d40a63" />
+
+---
+
+# **📌 9. Deploy Nexus Repository**
+
+### **Pull Nexus Image**
+
+```bash
+docker pull sonatype/nexus3
+```
+
+<img width="602" height="151" alt="image" src="https://github.com/user-attachments/assets/47cfaa95-1185-45ac-8901-5d10c22edcbe" />
+
+### **Run Nexus Container**
+
+```bash
+docker run -d --name nexus -p 8081:8081 sonatype/nexus3
+```
+
+<img width="602" height="64" alt="image" src="https://github.com/user-attachments/assets/fef45b3d-e628-440e-8c77-1ab1df8e7965" />
+
+Open in browser:
+
+```
+http://<EC2_PUBLIC_IP>:8081
+```
+
+<img width="602" height="243" alt="image" src="https://github.com/user-attachments/assets/ae810662-9afc-45f7-8c3c-65f5c203f47c" />
+
+### **Get Admin Password**
+
+```bash
+docker exec -it nexus cat /nexus-data/admin.password
+```
+<img width="602" height="114" alt="image" src="https://github.com/user-attachments/assets/3606aa95-3562-429b-97a1-e56bf31099a7" />
+
+<img width="602" height="277" alt="image" src="https://github.com/user-attachments/assets/201a8149-2188-47d8-bbdd-1d649ba63253" />
+
+<img width="602" height="201" alt="image" src="https://github.com/user-attachments/assets/bcc2a737-2f2e-4112-afa2-0eb69d84234b" />
+
+---
+
+# **📌 10. Configure Maven for Nexus**
+
+### **Update pom.xml**
+
+```xml
+<distributionManagement>
+  <repository>
+    <id>maven-releases</id>
+    <name>Maven Releases</name>
+    <url>http://<NEXUS_IP>:8081/repository/maven-releases/</url>
+  </repository>
+</distributionManagement>
+```
+
+<img width="602" height="29" alt="image" src="https://github.com/user-attachments/assets/f7a0e22f-e9be-46a7-beea-a7e11372ea52" />
+
+<img width="602" height="85" alt="image" src="https://github.com/user-attachments/assets/e5b71e14-19cd-4dd1-ae8a-6757d0e1cf0a" />
+
+
+### **Edit Maven settings.xml**
+
+Location:
+
+```
+vi /etc/maven/settings.xml 
+```
+
+Add:
+
+```xml
+<servers>
+  <server>
+    <id>maven-releases</id>
+    <username>admin</username>
+    <password>your_nexus_password</password>
+  </server>
+</servers>
+```
+
+<img width="602" height="30" alt="image" src="https://github.com/user-attachments/assets/678919d3-8cfc-409b-8562-c4c8212414bb" />
+
+<img width="602" height="109" alt="image" src="https://github.com/user-attachments/assets/6006df67-23d2-4ed9-9589-c48f450d8227" />
+
+---
+
+# **📌 11. Build & Upload to Nexus**
+
+```bash
+mvn clean deploy
+```
+
+
+<img width="602" height="120" alt="image" src="https://github.com/user-attachments/assets/c0410bef-044e-422b-8f4a-d3167b546d65" />
+
+
+<img width="602" height="156" alt="image" src="https://github.com/user-attachments/assets/d07e61a6-c2cc-4e4a-8ee3-64aa24d8c198" />
+
+Verify artifact in Nexus:
+
+```
+maven-releases/com/example/puzzle-game-webapp/1.0/
+```
+
+<img width="602" height="248" alt="image" src="https://github.com/user-attachments/assets/2d5dd2e0-e71a-44fc-82d2-155e08e6e01e" />
+
+---
+
+# **📌 12. Create Custom Tomcat Docker Image**
+
+### **Dockerfile**
+
+```
+
+```
+
+### Build Image
+
+```bash
+docker build -t pz-tomcat:1.0 .
+```
+# Step 1: Use official Tomcat image with JDK 17
+FROM tomcat:10.1.10-jdk17
+
+# Step 2: Switch to root and install curl
+USER root
+RUN apt-get update && \
+    apt-get install -y curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Step 3: Remove default Tomcat webapps
+RUN rm -rf /usr/local/tomcat/webapps/*
+
+# Step 4: Set environment variables for Nexus
+ENV NEXUS_USER=admin
+ENV NEXUS_PASS=admin123
+
+# These are correct values based on your Nexus URL
+ENV WAR_URL=http://54.81.139.84:8081/repository/maven-releases/com/example/puzzle-game-webapp/1.0/puzzle-game-webapp-1.0.war
+ENV WAR_NAME=puzzle-game-webapp.war
+
+# Step 5: Set working directory for Tomcat
+WORKDIR /usr/local/tomcat/webapps
+
+# Step 6: Download WAR (with fail if error)
+RUN echo "Downloading WAR from Nexus..." && \
+    curl -u "$NEXUS_USER:$NEXUS_PASS" -L -f -o "$WAR_NAME" "$WAR_URL" && \
+    echo "WAR downloaded successfully:" && ls -lh $WAR_NAME
+
+# Step 7: Expose Tomcat port
+EXPOSE 8080
+
+# Step 8: Start Tomcat
+CMD ["catalina.sh", "run"]
+
+---
+
+
+<img width="602" height="25" alt="image" src="https://github.com/user-attachments/assets/f26e76d3-46cd-4b2c-8d95-74b27091d6fb" />
+
+
+<img width="602" height="77" alt="image" src="https://github.com/user-attachments/assets/4fed7d87-c75a-47ed-b01e-398b44bba040" />
+
+# Now build the tomcat custom image:
+
+```
+docker build -t pz-tomcat:1.0 .
+```
+
+<img width="602" height="162" alt="image" src="https://github.com/user-attachments/assets/40e5aa49-16ce-4d4d-adab-4767cfb1a877" />
+
+
+<img width="602" height="91" alt="image" src="https://github.com/user-attachments/assets/1e2978d0-54fb-4135-86b4-7ffe8e824e01" />
+
+# Go to docker hub and create repo:
+
+
+<img width="602" height="246" alt="image" src="https://github.com/user-attachments/assets/4dd7bbda-6d34-4dd1-8023-318819f1aa0e" />
+
+# **📌 13. Push Image to Docker Hub**
+
+```bash
+docker login
+docker tag pz-tomcat:1.0 saikumar7596/pz-tomcat:1.0
+docker push saikumar7596/pz-tomcat:1.0
+```
+
+
+<img width="602" height="151" alt="image" src="https://github.com/user-attachments/assets/7d7609b7-be46-44bd-81a9-1fe435095e0c" />
+
+
+<img width="602" height="289" alt="image" src="https://github.com/user-attachments/assets/add391f0-b27b-4d87-8cba-efc233f34c83" />
+
+
+<img width="602" height="169" alt="image" src="https://github.com/user-attachments/assets/00495ef1-d5e2-4caa-9141-7bfcdc69456c" />
+
+
+<img width="602" height="241" alt="image" src="https://github.com/user-attachments/assets/4f0ca421-e824-4592-8c26-91c5a5668cdc" />
+
+
+# verify it
+
+<img width="602" height="184" alt="image" src="https://github.com/user-attachments/assets/0b802664-dc83-4cb4-837d-031605407cf7" />
+
+
+---
+
+# **📌 14. Test Tomcat Container**
+
+```bash
 docker run -d --name tomcat -p 8080:8080 pz-tomcat:1.0
 ```
 
----
 
-# 4 — Jenkins: start container (recommended with persistent volume + docker.sock)
+<img width="602" height="47" alt="image" src="https://github.com/user-attachments/assets/fec3acc7-d7ea-4bed-824e-433c694a67b7" />
 
-You already used `/home/ubuntu/jenkins_home` and `docker run` — the recommended command (runs with docker.sock mounted so pipeline can build/push):
+Check in browser:
 
-```bash
-# create persistent folder
-sudo mkdir -p /home/ubuntu/jenkins_home
-sudo chown 1000:1000 /home/ubuntu/jenkins_home   # Jenkins default user id is 1000
-# run jenkins with docker socket mounted and as root inside (if you need to run docker CLI inside)
-docker run -d \
-  --name jenkins \
-  --user root \
-  -p 8090:8080 \
-  -p 50000:50000 \
-  -v /home/ubuntu/jenkins_home:/var/jenkins_home \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  jenkins/jenkins:lts
+```
+http://<EC2_PUBLIC_IP>:8080/puzzle-game-webapp/
 ```
 
-**Notes:**
 
-* You used `--user root` so apt installs inside container succeed and docker CLI is available. Alternative: install docker inside Jenkins image and run with `--user root`.
-* After running, exec into container to check docker:
-
-  ```bash
-  docker exec -it jenkins bash
-  docker --version
-  docker ps
-  ```
-* If `docker` binary not present inside container but socket mounted, you can either:
-
-  * `apt update && apt install -y docker.io` inside container (useful), OR
-  * keep docker binary on host and use `docker` from container (requires installing docker client in container). You saw `docker` binary appears after installing it in container.
+<img width="602" height="152" alt="image" src="https://github.com/user-attachments/assets/e7866577-70c7-4190-b7f3-0abc157d8b3f" />
 
 ---
 
-# 5 — Install required tools inside Jenkins container (exact commands)
+# **📌 15. Install Jenkins**
 
-You chose to install tools inside the Jenkins container (preferred for self-contained agents).
-
-`docker exec -it jenkins bash` then:
-
-## 5.1 Install JDK 17 (if container has Java 21 this is fine — just ensure tools configured)
+### Pull Jenkins Image
 
 ```bash
-# as root inside the container
+docker pull jenkins/jenkins:lts
+```
+
+<img width="602" height="267" alt="image" src="https://github.com/user-attachments/assets/d8d19882-8b66-4622-93ee-64696aec8b3d" />
+
+### Create storage folder
+
+```bash
+sudo mkdir /jenkins-data
+sudo chmod 777 /jenkins-data
+```
+
+### Run Jenkins
+
+```bash
+docker run -d --name jenkins -p 8090:8080 -v /jenkins-data:/var/jenkins_home jenkins/jenkins:lts
+```
+
+<img width="602" height="113" alt="image" src="https://github.com/user-attachments/assets/d049c356-01eb-486a-82d3-4cb4343f45c2" />
+
+
+<img width="602" height="53" alt="image" src="https://github.com/user-attachments/assets/064a2003-736d-4709-ac42-3cafe5581b0a" />
+
+---
+
+# **📌 16. Unlock Jenkins**
+
+```bash
+docker exec -it jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+```
+
+<img width="602" height="296" alt="image" src="https://github.com/user-attachments/assets/a78a16aa-98f7-46a8-a999-4f54809a4e15" />
+
+
+<img width="602" height="38" alt="image" src="https://github.com/user-attachments/assets/11e01aa0-28eb-46cb-87f2-1fb9f380fef3" />
+
+
+<img width="602" height="301" alt="image" src="https://github.com/user-attachments/assets/7fedb407-9aa0-4fbd-95ac-3512c57db88e" />
+
+
+<img width="602" height="200" alt="image" src="https://github.com/user-attachments/assets/4bc27c62-089e-4c36-b6a6-8928d731e14b" />
+
+
+Install **Suggested Plugins**.
+
+---
+
+# **📌 17. Install Required Jenkins Plugins**
+
+✔ Git
+✔ Pipeline
+✔ Docker Pipeline
+✔ SSH Agent
+✔ SonarQube Scanner
+✔ Nexus Artifact Uploader
+✔ Credentials Binding
+
+
+
+<img width="602" height="294" alt="image" src="https://github.com/user-attachments/assets/e94a666f-9f5f-45e8-a522-2167190434ee" />
+
+
+<img width="602" height="333" alt="image" src="https://github.com/user-attachments/assets/ce5645a4-c49c-42c0-b900-356605b099c5" />
+
+
+<img width="602" height="309" alt="image" src="https://github.com/user-attachments/assets/2bfd3409-327d-4b16-af37-989e72cf9a61" />
+
+---
+
+# **📌 18. Install Java, Maven & Docker *inside Jenkins container***
+
+### Enter as root
+
+```bash
+docker exec -u 0 -it jenkins bash
+```
+
+Install Java:
+
+```bash
 apt update
-apt install -y openjdk-17-jdk maven docker.io curl unzip wget
-# verify
-java -version
-mvn -v
-docker --version
+apt install -y openjdk-17-jdk
 ```
 
-*Important:* Jenkins itself runs on Java provided by the image (21 is fine), but the `tools { jdk 'JDK17' }` expects a JDK tool configured in Jenkins Global Tool Configuration OR you must install JDK binaries and configure that tool in Jenkins global config.
-
-## 5.2 Sonar Scanner CLI (optional, recommended)
-
-You tried to download sonar-scanner CLI. easiest on container:
+Install Maven:
 
 ```bash
-# inside container (as root)
-apt update
-apt install -y wget unzip ca-certificates
-
-# download release (if direct random github url fails use official SonarSource mirror)
-curl -L -o sonar-scanner.zip \
-  "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-5.0.1.3006-linux.zip"
-
-# unzip
-unzip sonar-scanner.zip
-mv sonar-scanner-5.0.1.3006-linux /opt/sonar-scanner
-# symlink
-ln -s /opt/sonar-scanner/bin/sonar-scanner /usr/local/bin/sonar-scanner
-# verify
-which sonar-scanner
-sonar-scanner --version
+apt install -y maven
 ```
 
-You found `which sonar-scanner` -> `/usr/local/bin/sonar-scanner`. Use this path in Jenkins Tool config or set `SONAR_SCANNER_HOME` accordingly.
+<img width="602" height="71" alt="image" src="https://github.com/user-attachments/assets/8fade785-8ac3-4673-ad98-a9224bd16563" />
 
-> If `curl` downloads a tiny HTML (403), try using GitHub release URL or add proper headers. You already resolved it using curl to GitHub asset and then discovered the file was not downloaded fully; fixing SSL (ca-certificates) solved it for you.
-
-## 5.3 Permissions: docker socket
-
-If you mount `/var/run/docker.sock` into the container, ensure `docker` group or permissions allow `jenkins` user to call it.
-
-Quick fix (on host):
+Install Docker:
 
 ```bash
-sudo chmod 666 /var/run/docker.sock
-# or better: chown root:docker /var/run/docker.sock && add jenkins user to docker group inside container
+apt install -y docker.io
 ```
 
-Inside container:
+Add Jenkins to docker group:
 
 ```bash
 groupadd docker || true
 usermod -aG docker jenkins
-# restart jenkins container or new shell
 ```
 
----
+<img width="602" height="59" alt="image" src="https://github.com/user-attachments/assets/0ab42550-5150-4a97-bcfe-0fe3fed1b5d8" />
 
-# 6 — Configure Jenkins (UI steps, exact values)
-
-Open `http://54.81.139.84:8090` (or mapped port).
-
-## 6.1 Plugins (Manage Jenkins → Manage Plugins → Available)
-
-Install:
-
-* Git plugin
-* Pipeline (Pipeline: Stage View, Pipeline: GitHub, Pipeline Maven Integration)
-* Docker Pipeline
-* Docker (plugin)
-* Maven Integration plugin
-* SonarQube Scanner
-* Sonar (SonarQube plugin)
-* Nexus Artifact Uploader (or use curl in pipeline)
-* SSH Agent
-* Credentials Binding
-* Blue Ocean (optional)
-
-You already had many installed.
-
-## 6.2 Global Tool Configuration (Manage Jenkins → Global Tool Configuration)
-
-### Maven
-
-* Name: `Maven`
-* Install automatically: (optional) or Path: `/usr/bin/mvn` (if installed inside container)
-
-  * If installed in container at `/usr/bin/mvn`, set `Maven` to that path.
-
-### JDK
-
-* Name: `JDK17`
-* Path: `/usr/lib/jvm/java-17-openjdk-amd64` (confirm inside container)
-
-  * Or leave `Install automatically` (not recommended if container offline)
-
-### Sonar Scanner
-
-* Name: `sonar-scanner`
-* Path: `/opt/sonar-scanner` (or `/usr/local/bin/sonar-scanner` depending on where you installed)
-
-  * If you symlinked to `/usr/local/bin/sonar-scanner`, you can point to `/usr/local` or use the Sonar plugin automatic install.
-
-### Docker Tool (optional)
-
-* If you prefer the Docker plugin tool, configure it. Alternatively rely on `docker` executable installed inside container and the docker socket.
-
-## 6.3 Configure SonarQube in Jenkins (Manage Jenkins → Configure System)
-
-* SonarQube servers → Add SonarQube
-
-  * Name: `sonar-server`
-  * Server URL: `http://54.81.139.84:9000`
-  * Server authentication token: create token in Sonar UI (User > My Account > Security > Generate Token) and paste token into Jenkins Global Credentials (Secret text) and then select it here.
-
-## 6.4 Add Credentials (Manage Jenkins → Credentials → System → Global)
-
-* Nexus credentials:
-
-  * Kind: Username with password
-  * Username: `admin`
-  * Password: `admin123` (or actual)
-  * ID: `nexus`
-* Docker Hub credentials:
-
-  * Kind: Username with password
-  * Username: `<dockerhub-user>`
-  * Password: `<dockerhub-pass>`
-  * ID: `dockerhub-creds`
-* SSH credential for deploy to EC2:
-
-  * Kind: `SSH Username with private key`
-  * Username: `ubuntu`
-  * Private Key: (Enter directly) — paste the private key content (your `ci/cd.pem` private key content). If your private key is in local machine, copy contents and paste.
-  * ID: `docker-server`
-* GitHub token (optional for API/checkout)
-
-  * Kind: `Secret Text` or `Username with password` (token as password)
-  * ID: `github-token`
-* If Sonar plugin needs token, store token as secret text and use in Sonar configuration.
-
-**Important:** For SSH you must add the corresponding public key to the `~ubuntu/.ssh/authorized_keys` on the EC2 host you want to SSH into (same host in your case).
-
----
-
-# 7 — GitHub Webhook (exact steps)
-
-1. In GitHub repository → Settings → Webhooks → Add webhook.
-2. Payload URL: `http://54.81.139.84:8090/github-webhook/` (use Jenkins address; if behind firewall use public IP/port mapping)
-3. Content type: `application/json`
-4. Secret: (optional) — if used, configure same secret in Jenkins GitHub plugin.
-5. Which events: choose `Push events` (plus PR events if you want).
-6. Save. Test by pushing a commit.
-
----
-
-# 8 — Sonar webhook (optional)
-
-SonarQube can send webhooks to Jenkins or other systems when analysis completes. It's optional because Jenkins `waitForQualityGate` polls Sonar. Steps:
-
-1. SonarQube Admin → Administration → Configuration → Webhooks → Create
-2. URL: Jenkins endpoint or any listener you want. (Not required for Jenkins pipeline to waitForQualityGate — that uses the Sonar token and the task id.)
-
----
-
-# 9 — Nexus: fix release vs snapshot & delete artifact
-
-**Problem you faced:** 400 `Repository version policy: RELEASE does not allow version: 1.0-SNAPSHOT`.
-
-**Solutions:**
-
-* If your project version includes `-SNAPSHOT` use a `maven-snapshots` repository (not `maven-releases`).
-* If you want to push to `maven-releases` change `pom.xml` version to `1.0` (or any non-SNAPSHOT).
-
-### 9.1 Quick fix in `pom.xml`
-
-Either:
-
-* Keep `1.0-SNAPSHOT` and change `NEXUS_URL` to snapshot repo: `http://54.81.139.84:8081/repository/maven-snapshots/`, OR
-* Edit `pom.xml` `<version>1.0</version>` and push release.
-
-### 9.2 Delete old artifact from Nexus (UI)
-
-1. Open `http://54.81.139.84:8081` → Login.
-2. Browse → Select repository `maven-releases` → navigate to `com/example/puzzle-game-webapp/1.0` → click `Delete` on artifact (or delete the entire `1.0` folder). Confirm.
-
-### 9.3 Delete via Nexus REST (recommended for automation)
-
-1. Search for component (GET):
+Exit & restart:
 
 ```bash
-curl -u admin:admin123 "http://54.81.139.84:8081/service/rest/v1/search?repository=maven-releases&group=com.example&name=puzzle-game-webapp&version=1.0"
+exit
+docker restart jenkins
 ```
 
-Response contains `items` with `id`s. Then delete by component id:
+<img width="602" height="167" alt="image" src="https://github.com/user-attachments/assets/3f786d90-4c80-47c9-9ff1-cec0a13bb85e" />
+
+---
+
+# **📌 19. Jenkins Tool Configuration**
+
+| Tool          | Name          | Path                               |
+| ------------- | ------------- | ---------------------------------- |
+| JDK           | JDK17         | /usr/lib/jvm/java-17-openjdk-amd64 |
+| Maven         | Maven         | /usr/bin/mvn                       |
+| Sonar Scanner | sonar-scanner | /opt/sonar-scanner                 |
+| Docker        | docker        | /usr/bin                           |
+
+
+
+<img width="602" height="121" alt="image" src="https://github.com/user-attachments/assets/96828db1-2c20-4530-8fd0-5a75129fc454" />
+
+
+<img width="602" height="185" alt="image" src="https://github.com/user-attachments/assets/99dd3649-2baf-4ef4-a4d5-95d215728a0b" />
+
+
+<img width="602" height="117" alt="image" src="https://github.com/user-attachments/assets/7042c5b2-498c-49aa-9726-57489b598dfd" />
+
+
+<img width="602" height="161" alt="image" src="https://github.com/user-attachments/assets/e04b5550-7f80-4887-bb88-6c3a8f0314fa" />
+
+
+<img width="602" height="131" alt="image" src="https://github.com/user-attachments/assets/bfee68df-26fa-4aa3-91cb-5e9d4459cebb" />
+
+---
+
+# **📌 20. Configure Jenkins Credentials**
+
+### **Nexus**
+
+```
+ID: nexus
+Username: admin
+Password: admin123
+```
+
+<img width="602" height="296" alt="image" src="https://github.com/user-attachments/assets/df6a5801-e2f3-4815-bacd-e5b65f34f1b5" />
+
+
+<img width="602" height="168" alt="image" src="https://github.com/user-attachments/assets/7a3b22e7-d338-4e83-833b-8e92c2e97c63" />
+
+
+### **DockerHub**
+
+```
+ID: dockerhub-creds
+```
+
+
+<img width="602" height="261" alt="image" src="https://github.com/user-attachments/assets/6c275a81-b0e0-48f6-975d-e1e3f14000e6" />
+
+
+<img width="602" height="153" alt="image" src="https://github.com/user-attachments/assets/50e11429-77e6-442b-b7f2-c6affa5c0fc3" />
+
+
+### **SSH Private Key for EC2 Deployment**
+
+```
+ID: docker-server
+Username: ubuntu
+Private Key: paste .pem file
+```
+
+---
+
+# **📌 21. Configure SonarQube in Jenkins**
+
+Path:
+**Manage Jenkins → Configure System → SonarQube**
+
+```
+Name: sonar-server
+URL: http://<SONAR_IP>:9000
+Token: <your-token>
+```
+
+<img width="602" height="293" alt="image" src="https://github.com/user-attachments/assets/8205f2e8-5ac1-49cc-a2b2-d705bf1c2887" />
+
+
+<img width="602" height="252" alt="image" src="https://github.com/user-attachments/assets/919b8850-d57e-4012-b26c-6b4b3eb0f876" />
+
+---
+
+# Create Pipeline Job in Jenkins
+Go to New Item → Pipeline
+Name:
+puzzle-game-ci-cd
+Scroll to Pipeline → Definition = Pipeline Script from SCM
+SCM: Git
+Repo URL:
+https://github.com/SaiKumar7596/puzzle-game-java
+Script Path:
+Jenkinsfile
+Save.
+
+<img width="602" height="292" alt="image" src="https://github.com/user-attachments/assets/16dac26a-474d-43bf-8ca6-37e798011679" />
+
+
+<img width="602" height="180" alt="image" src="https://github.com/user-attachments/assets/e9111c15-7022-4661-b05d-d2f63a39d603" />
+
+# **📌 22. Configure GitHub Webhook**
+
+GitHub → Repo → Settings → Webhooks → Add Webhook
+
+```
+http://<JENKINS_IP>:8080/github-webhook/
+Content type: application/json
+Event: Push
+```
+
+<img width="602" height="262" alt="image" src="https://github.com/user-attachments/assets/b1e6f84a-12a0-4b91-a00b-bd16001bf110" />
+
+
+<img width="602" height="202" alt="image" src="https://github.com/user-attachments/assets/817f5b38-2604-4a8f-b4f5-4cadb7f208ac" />
+
+---
+
+# **📌 23. Configure SonarQube Webhook**
+
+SonarQube UI → Administration → Configuration → Webhooks
+
+```
+http://<JENKINS_IP>:8080/sonarqube-webhook/
+```
+
+<img width="602" height="242" alt="image" src="https://github.com/user-attachments/assets/2a548b24-eef4-4067-9e21-461f4d40cf6b" />
+
+---
+✅ Before Running the Jenkins Pipeline — Create Dockerfile & Jenkinsfile in Your GitHub Repo
+
+Before triggering your CI/CD pipeline, you must prepare your application repository with two important files:
+
+1. Dockerfile (For Tomcat Deployment Image)
+
+This Dockerfile builds your custom Tomcat image that will deploy the .war file downloaded from Nexus.
+
+2. Jenkinsfile (Pipeline Script)
+
+Your Jenkinsfile defines the entire CI/CD workflow:
+
+Clone the source code
+
+Run SonarQube scan
+
+Build using Maven
+
+Deploy .war to Nexus
+
+Build custom Docker image
+
+Push to Docker Hub
+
+Deploy container
+
+
+
+# **📌 24. Jenkinsfile (Final Production Version)**
+
+```
+```
+
+---
+
+# **📌 25. Run Jenkins Pipeline**
+
+After pushing new code → the pipeline runs automatically.
+
+---
+
+<img width="602" height="303" alt="image" src="https://github.com/user-attachments/assets/37dab965-f9b7-4e74-9f48-05c76070c392" />
+
+
+<img width="602" height="303" alt="image" src="https://github.com/user-attachments/assets/e95270b4-9884-4f75-8903-b245061f4ca0" />
+
+
+<img width="602" height="274" alt="image" src="https://github.com/user-attachments/assets/e9882303-9a27-4c58-b24c-ef3f4f4bf44c" />
+
+
+<img width="602" height="241" alt="image" src="https://github.com/user-attachments/assets/f41ad30f-9b19-4e1c-917f-5720b0923402" />
+
+
+# **📌 26. Verification**
+
+### Check containers:
 
 ```bash
-curl -u admin:admin123 -X DELETE "http://54.81.139.84:8081/service/rest/v1/components/<componentId>"
+docker ps
 ```
 
-**Important:** Deleting a release may be blocked by policy (immutable release) — if so you may need to change repository settings or delete the asset via Nexus UI with admin privileges or create a new version.
+<img width="602" height="53" alt="image" src="https://github.com/user-attachments/assets/419c93d5-0422-49dd-9c09-f98060c5736c" />
 
----
-
-# 10 — Dockerfile (corrected final)
-
-Use this Dockerfile in repo root. It downloads the WAR from Nexus at build-time. Note: this requires `docker build` to have the secrets (NEXUS_USER/NEXUS_PASS) passed as build args (we do that in the Jenkins pipeline).
-
-```dockerfile
-# -------- Stage 1: Downloader --------
-FROM eclipse-temurin:17-jre AS downloader
-
-ARG NEXUS_URL
-ARG GROUP_ID_PATH
-ARG APP_NAME
-ARG VERSION
-ARG NEXUS_USER
-ARG NEXUS_PASS
-
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-# Download artifact from Nexus (AUTH)
-RUN ARTIFACT_URL="${NEXUS_URL%/}/${GROUP_ID_PATH}/${APP_NAME}/${VERSION}/${APP_NAME}-${VERSION}.war" && \
-    echo "Downloading WAR from: ${ARTIFACT_URL}" && \
-    curl -u "${NEXUS_USER}:${NEXUS_PASS}" -L "${ARTIFACT_URL}" -o /tmp/app.war
-
-# -------- Stage 2: Tomcat --------
-FROM tomcat:10.1.10-jdk17
-
-# Remove default ROOT app
-RUN rm -rf /usr/local/tomcat/webapps/ROOT
-
-# Copy the downloaded war as ROOT.war for auto-deploy
-COPY --from=downloader /tmp/app.war /usr/local/tomcat/webapps/ROOT.war
-
-EXPOSE 8080
-CMD ["catalina.sh", "run"]
-```
-
-**Fixes made:**
-
-* Corrected `COPY ... ROOT.wa` → `ROOT.war`.
-* Use `ARTIFACT_URL="${NEXUS_URL%/}/...` to avoid double slashes.
-* Ensure Tomcat base image tag consistent.
-
----
-
-# 11 — Jenkinsfile (final corrected, one file — paste to repo)
-
-This uses secure credential handling and avoids insecure Groovy interpolation of secrets in `sh` strings. It relies on Docker socket mounted or docker installed in container.
-
-```groovy
-pipeline {
-  agent any
-
-  environment {
-    NEXUS_URL   = "http://54.81.139.84:8081/repository/maven-releases/"
-    DOCKER_REPO = "saikumar7596/my-repo"    // change to your Docker Hub repo
-    GROUP_ID    = "com.example"
-    ARTIFACT_ID = "puzzle-game-webapp"
-    MVN_OPTS    = "-DskipTests"
-    DEPLOY_HOST = "54.81.139.84"
-    CONTAINER_NAME = "tomcat"
-  }
-
-  tools {
-    maven "Maven"   // Ensure this name exists in Manage Jenkins -> Global Tool Configuration
-    jdk   "JDK17"   // Ensure this name exists as well
-  }
-
-  stages {
-
-    stage('Checkout') {
-      steps {
-        checkout scm
-        echo "Commit: ${env.GIT_COMMIT ?: 'local'}"
-      }
-    }
-
-    stage('SonarQube Analysis') {
-      steps {
-        withSonarQubeEnv('sonar-server') {
-          sh 'mvn clean verify sonar:sonar -Dsonar.projectKey=${ARTIFACT_ID}'
-        }
-      }
-    }
-
-    stage('Quality Gate') {
-      steps {
-        timeout(time: 5, unit: 'MINUTES') {
-          waitForQualityGate abortPipeline: true
-        }
-      }
-    }
-
-    stage('Build WAR') {
-      steps {
-        sh "mvn clean package ${MVN_OPTS}"
-      }
-    }
-
-    stage('Upload WAR to Nexus') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'nexus', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-          script {
-            def WAR = sh(script: "ls target/*.war | head -n 1", returnStdout: true).trim()
-            if (!fileExists(WAR)) { error "WAR not found at ${WAR}" }
-            def VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
-            def ARTIFACT_PATH = "${GROUP_ID.replace('.','/')}/${ARTIFACT_ID}/${VERSION}/${ARTIFACT_ID}-${VERSION}.war"
-            echo "Uploading ${WAR} to ${NEXUS_URL}${ARTIFACT_PATH}"
-            // Use curl with credentials securely passed via environment
-            sh """
-              curl -v -u "${NEXUS_USER}:${NEXUS_PASS}" --upload-file "${WAR}" "${NEXUS_URL}${ARTIFACT_PATH}"
-            """
-          }
-        }
-      }
-    }
-
-    stage('Prepare WAR for Docker') {
-      steps {
-        sh '''
-          set -e
-          WAR=$(ls target/*.war | head -n1)
-          if [ -z "$WAR" ]; then echo "No WAR found"; exit 1; fi
-          cp -f "$WAR" target/app.war
-          ls -lh target/app.war
-        '''
-      }
-    }
-
-    stage('Build Docker Image') {
-      steps {
-        script {
-          def shortCommit = (env.GIT_COMMIT ?: 'local').take(7)
-          def version = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
-          withCredentials([usernamePassword(credentialsId: 'nexus', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
-            sh """
-              docker build \
-                --build-arg NEXUS_URL='${NEXUS_URL}' \
-                --build-arg GROUP_ID_PATH='${GROUP_ID.replace('.','/')}' \
-                --build-arg APP_NAME='${ARTIFACT_ID}' \
-                --build-arg VERSION='${version}' \
-                --build-arg NEXUS_USER='${NEXUS_USER}' \
-                --build-arg NEXUS_PASS='${NEXUS_PASS}' \
-                -t ${DOCKER_REPO}:${shortCommit} .
-              docker tag ${DOCKER_REPO}:${shortCommit} ${DOCKER_REPO}:latest
-            """
-          }
-        }
-      }
-    }
-
-    stage('Push Docker Image') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-          script {
-            def shortCommit = (env.GIT_COMMIT ?: 'local').take(7)
-            sh """
-              echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
-              docker push ${DOCKER_REPO}:${shortCommit}
-              docker push ${DOCKER_REPO}:latest
-            """
-          }
-        }
-      }
-    }
-
-    stage('Deploy on same EC2 via SSH') {
-      steps {
-        // Jenkins must have SSH credential with id 'docker-server'
-        sshagent(['docker-server']) {
-          sh """
-            ssh -o StrictHostKeyChecking=no ubuntu@${DEPLOY_HOST} \\
-            'docker pull ${DOCKER_REPO}:latest && \\
-             docker stop ${CONTAINER_NAME} 2>/dev/null || true && \\
-             docker rm ${CONTAINER_NAME} 2>/dev/null || true && \\
-             docker run -d --name ${CONTAINER_NAME} -p 8080:8080 --restart unless-stopped ${DOCKER_REPO}:latest'
-          """
-        }
-      }
-    }
-  }
-
-  post {
-    success { echo "PIPELINE SUCCEEDED" }
-    failure { echo "PIPELINE FAILED" }
-  }
-}
-```
-
-**Notes:**
-
-* Make sure Jenkins Global Tools `Maven` and `JDK17` are configured and point to actual installed paths in the Jenkins container.
-* `docker` calls assume Docker daemon accessible (socket mounted or docker installed in container).
-* We explicitly pass Nexus credentials to docker build as build args. Be aware build args are visible in image history; for safer pipelines, download artifact in pipeline and use `COPY` into final image (avoid passing credentials into Dockerfile). Another safe way is to `curl` the artifact in pipeline and `docker build` using local `target/app.war` via a `Dockerfile` that just copies `/target/app.war`. That prevents credentials being baked into image history.
-
----
-
-# 12 — Recommended safer Docker build alternative (avoid creds in Dockerfile)
-
-**Safer approach:** In pipeline, after `Prepare WAR for Docker`, do:
+### Logs:
 
 ```bash
-# in pipeline (sh)
-cp target/app.war build-context/ROOT.war
-docker build -t ${DOCKER_REPO}:${shortCommit} build-context
-# Dockerfile just copies ROOT.war into Tomcat image (no NEXUS creds)
+docker logs tomcat
 ```
 
-Use Dockerfile:
+You should see:
 
-```dockerfile
-FROM tomcat:10.1.10-jdk17
-RUN rm -rf /usr/local/tomcat/webapps/ROOT
-COPY ROOT.war /usr/local/tomcat/webapps/ROOT.war
-EXPOSE 8080
-CMD ["catalina.sh", "run"]
+```
+Deployment of web application archive [...] has finished
 ```
 
-This is better security-wise (no credentials in build args).
+### Application URL:
+
+```
+http://<EC2_IP>:8080/
+```
+
+<img width="602" height="130" alt="image" src="https://github.com/user-attachments/assets/baaaf91c-462d-4862-8ad3-af69b53fded6" />
+
 
 ---
 
-# 13 — `pom.xml` — two options (snapshot vs release)
+# **📌 27. Troubleshooting**
 
-### Option A — If you want SNAPSHOT (easier for dev)
+### ❌ SonarQube not reachable
 
-Keep:
-
-```xml
-<version>1.0-SNAPSHOT</version>
-```
-
-Then set `NEXUS_URL` to `.../repository/maven-snapshots/` in pipeline/env.
-
-### Option B — Release (if you want to push to `maven-releases`)
-
-Change `pom.xml` to:
-
-```xml
-<version>1.0</version>
-```
-
-You already tested pushing `1.0` and got different error (cannot be updated) — remove old release from Nexus or bump version on each release.
-
-**Corrected `pom.xml` as release (1.0)** (paste to project if you choose release):
-
-```xml
-<project ...>
-  ...
-  <groupId>com.example</groupId>
-  <artifactId>puzzle-game-webapp</artifactId>
-  <version>1.0</version>
-  ...
-</project>
-```
-
----
-
-# 14 — How you deleted and backed up Jenkins (what you did — good practice)
-
-You did:
+→ Restart container
 
 ```bash
-docker cp jenkins:/var/jenkins_home /home/ubuntu/jenkins-backup
-# restored into /home/ubuntu/jenkins_home and re-run docker with volume
-docker run -d --name jenkins --user root -p 8090:8080 -v /home/ubuntu/jenkins_home:/var/jenkins_home -v /var/run/docker.sock:/var/run/docker.sock jenkins/jenkins:lts
+docker restart sonarqube
 ```
 
-This is the **correct** idea: **backup `/var/jenkins_home`**, then recreate container mounting that folder. You kept plugins, jobs, credentials, etc.
+### ❌ Nexus upload failing
 
-**Recommendation:** Always maintain a scheduled backup script that archives `/var/jenkins_home` to a safe location.
+→ Check credentials in settings.xml
+→ Check repository URL
 
-Example backup script:
+### ❌ Jenkins cannot run Docker
 
-```bash
-#!/bin/bash
-BACKUP_DIR="/home/ubuntu/jenkins-backups"
-mkdir -p "$BACKUP_DIR"
-TS=$(date +%F_%H%M)
-tar -czf "$BACKUP_DIR/jenkins_home_$TS.tar.gz" -C /home/ubuntu jenkins_home
-# Optional: upload to s3 or remote
-```
+→ Add user to docker group
+→ Restart Jenkins container
 
----
+### ❌ Webhook not triggering
 
-# 15 — Nexus artifact deletion steps (recap with exact commands)
+→ Ensure URL ends with `/`
 
-1. UI: Browse repo → select component → Delete.
-2. REST:
+### ❌ Tomcat WAR not deployed
 
-```bash
-# search:
-curl -u admin:admin123 "http://54.81.139.84:8081/service/rest/v1/search?repository=maven-releases&group=com.example&name=puzzle-game-webapp&version=1.0"
-# take component id from "items[0].id" in response
-# delete:
-curl -u admin:admin123 -X DELETE "http://54.81.139.84:8081/service/rest/v1/components/<componentId>"
-```
+→ Ensure Dockerfile WAR_URL is correct
 
 ---
 
-# 16 — Troubleshooting (common errors you faced & fixes)
+# **📌 28. Conclusion**
 
-### 1) `Repository version policy: RELEASE does not allow version: 1.0-SNAPSHOT`
+Your CI/CD pipeline:
 
-* Cause: uploading a SNAPSHOT to a release repo.
-* Fix: use `maven-snapshots` repo or change project version to release (1.0). Remove existing artifacts if necessary.
-
-### 2) `The JAVA_HOME environment variable is not defined correctly`
-
-* Cause: `tools` block injected tool but JAVA_HOME not set or Maven uses different JDK.
-* Fix: ensure JDK path is set in Manage Jenkins → Global Tool Configuration, name matches `tools { jdk "JDK17" }`. Alternatively, set `env: JAVA_HOME` in pipeline:
-
-  ```groovy
-  environment { JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-amd64' }
-  ```
-
-### 3) `Cannot connect to the Docker daemon at unix:///var/run/docker.sock`
-
-* Cause: `docker` not installed in container OR docker socket not mounted OR permission problem.
-* Fix:
-
-  * Mount `-v /var/run/docker.sock:/var/run/docker.sock` when starting Jenkins container.
-  * Install docker client inside Jenkins container (`apt install docker.io`).
-  * Adjust socket permissions (temporary): `sudo chmod 666 /var/run/docker.sock` (less secure). Better: add `jenkins` user to host `docker` group or chown socket accordingly.
-
-### 4) Sonar download `403` / broken zip
-
-* Cause: download redirect or missing headers; missing `ca-certificates`.
-* Fix: install `ca-certificates`, `wget`/`curl`, use GitHub release URL with `curl -L` and verify `Content-Length`. Then `unzip`.
-
-### 5) `WARNING: A secret was passed to "sh" using Groovy String interpolation`
-
-* Cause: using `"$NEXUS_PASS"` in Groovy string.
-* Fix: prefer triple-quotes and use `"""` and pass credentials via environment from `withCredentials` as shown. Avoid logging secrets.
-
-### 6) `mvn: not found` inside pipeline run after restore
-
-* Cause: Maven was not installed in restored Jenkins container or Global Tool not configured to locate it.
-* Fix: install maven inside container and set Maven tool path in Global Tool Configuration or set PATH/JENKINS to use `/usr/bin/mvn`.
+✔ Automatically analyzes code
+✔ Uploads artifacts
+✔ Builds Docker images
+✔ Deploys to EC2
+✔ Fully automated using Jenkins
 
 ---
+🎯 Your CI/CD Now Runs Automatically
+Whenever you push to main, the full pipeline runs from GitHub Actions.
 
-# 17 — Final checklist (what to run now)
-
-1. Make sure `jenkins` container is running with:
-
-   * `/home/ubuntu/jenkins_home:/var/jenkins_home` mounted
-   * `/var/run/docker.sock:/var/run/docker.sock` mounted
-2. Exec into `jenkins` container and ensure:
-
-   ```bash
-   apt update && apt install -y maven docker.io openjdk-17-jdk curl wget unzip
-   # ensure docker client works
-   docker --version
-   mvn --version
-   java -version
-   which sonar-scanner  # should show /usr/local/bin/sonar-scanner if installed
-   ```
-3. In Jenkins UI:
-
-   * Configure Tools: Maven path, JDK17 path, sonar-scanner path.
-   * Add Credentials: nexus, dockerhub-creds, docker-server (SSH private key), github-token (if needed).
-   * Install recommended plugins.
-4. Ensure your `pom.xml` version matches the repository you intend to upload to.
-
-   * If snapshot: change NEXUS URL in pipeline env to snapshot repo.
-5. Push corrected Jenkinsfile + Dockerfile + (optionally updated pom.xml) to GitHub.
-6. In GitHub repo: add webhook to `http://54.81.139.84:8090/github-webhook/`.
-7. Trigger a commit/push and watch the Jenkins job.
-
----
-
-# 18 — Documentation checklist for your final artifact (what I will include if you want a printable lab guide)
-
-* Full step-by-step commands (host + container)
-* All Jenkins UI clicks + exact values (tools names, IDs)
-* Final Jenkinsfile, Dockerfile, and pom.xml
-* Backup/restore and disaster recovery instructions
-* Troubleshooting section with logs + fixes
-* Architecture diagram (ASCII + recommended diagram PNG)
-* Appendix: Nexus REST API examples + common error codes
-
----
-
-# 19 — Interview-ready concise answer (what you'll say)
-
-“I built a Jenkins-driven CI/CD pipeline on an EC2 host. Jenkins (in Docker) runs SonarQube analysis, packages a WAR with Maven, uploads to Nexus, builds a Tomcat Docker image with the WAR, pushes the image to Docker Hub, and deploys the container to the same EC2. I persisted Jenkins config to a host volume and maintain backups of `/var/jenkins_home`. I solved common issues: Nexus release vs snapshot policy, containerized docker access via `docker.sock`, SonarScanner installation, and ensured credentials (Nexus/Docker/SSH) are stored in Jenkins Credentials securely.”
-
----
-
-# 20 — What I’ll deliver now (you already confirmed)
-
-* The full documentation above (this is it).
-* I’ve included final Jenkinsfile, Dockerfile and recommended safer Docker build approach.
-* I included commands you ran and the fixes you implemented (backup/restore, chmod on docker.sock, installing docker/maven inside container, sonar-scanner issues, Nexus deletion steps).
-
----
-
-If you want, I’ll now:
-
-1. Produce a single downloadable **markdown** file of the entire guide ready to upload/print (I can create it here).
-2. Or export it into a multi-page PDF/HTML structure (I can prepare the markdown now).
-
-Which one do you want next?
-
-* Reply **A** to get a ready-to-download **full markdown document** in this chat (I’ll paste it complete).
-* Reply **B** to get the same content but **packaged as a ZIP with files** (Jenkinsfile, Dockerfile, pom.xml, docs) so you can drop into your repo.
